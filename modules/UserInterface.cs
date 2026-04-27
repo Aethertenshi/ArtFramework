@@ -2,6 +2,7 @@
 using Microsoft.Xna.Framework.Input;
 using Microsoft.Xna.Framework;
 using ArtFramework;
+using MainGame;
 
 namespace ArtFramework.UserInterface
 {
@@ -124,38 +125,38 @@ namespace ArtFramework.UserInterface
             _prevMouse = mouse;
         }
 
-        private void Layout(ArtGame engine)
-        {
-            float centerY = Rect.Y + Rect.Height * 0.5f;
-            float cursorY = Rect.Y + Padding.Y + _scroll;
-
-            // Unused in the final calculation but good to have if you want to clamp later
-            // float screenW = engine.ScreenWidth; 
-
-            foreach (var child in Children)
+            private void Layout(ArtGame engine)
             {
-                // Get the struct, modify it, put it back
-                Rectangle r = child.Rect;
+                float centerY = Rect.Y + Rect.Height * 0.5f;
+                float cursorY = Rect.Y + Padding.Y + _scroll;
 
-                // XNA Rectangles require Ints
-                r.Y = (int)cursorY;
+                // Unused in the final calculation but good to have if you want to clamp later
+                // float screenW = engine.ScreenWidth; 
 
-                // Normalised distance from centre [0 = centre, 1 = carousel edge, >1 = beyond].
-                float t = Math.Abs((r.Y + r.Height * 0.5f) - centerY) / (Rect.Height * 0.5f);
+                foreach (var child in Children)
+                {
+                    // Get the struct, modify it, put it back
+                    Rectangle r = child.Rect;
 
-                // Quadratic falloff: 1 at centre, 0 at edge.
-                float curve = MathF.Pow(MathHelper.Clamp(1f - t, 0f, 1f), 2f);
+                    // XNA Rectangles require Ints
+                    r.Y = (int)cursorY;
 
-                // Centre button sits at Rect.X (left edge of the carousel).
-                // Farther buttons slide right by however much curve they have lost.
-                r.X = (int)(((Rect.X + Rect.Width) - r.Width) + CurveMagnitude * (1f - curve));
+                    // Normalised distance from centre [0 = centre, 1 = carousel edge, >1 = beyond].
+                    float t = Math.Abs((r.Y + r.Height * 0.5f) - centerY) / (Rect.Height * 0.5f);
 
-                // Reassign the modified rect
-                child.Rect = r;
+                    // Quadratic falloff: 1 at centre, 0 at edge.
+                    float curve = MathF.Pow(MathHelper.Clamp(1f - t, 0f, 1f), 2f);
 
-                cursorY += r.Height + Padding.Y;
+                    // Centre button sits at Rect.X (left edge of the carousel).
+                    // Farther buttons slide right by however much curve they have lost.
+                    r.X = (int)(((Rect.X + Rect.Width) - r.Width) + CurveMagnitude * (1f - curve));
+
+                    // Reassign the modified rect
+                    child.Rect = r;
+
+                    cursorY += r.Height + Padding.Y;
+                }
             }
-        }
     }
     public class LevelButton : IDrawable
     {
@@ -235,7 +236,7 @@ namespace ArtFramework.UserInterface
         // ── Draw ─────────────────────────────────────────────────────────────────
         public void Draw(ArtGame engine)
         {
-            int x = Rect.X;
+            int x = Rect.X + (int)MainGame.CoreGame2.CarouselOffsetX;
             int y = Rect.Y;
             int w = Rect.Width;
             int h = Rect.Height;
@@ -250,7 +251,7 @@ namespace ArtFramework.UserInterface
 
             int drawW = (int)(tex.Width * scale);
             int drawH = (int)(tex.Height * scale);
-            int drawX = Rect.X + (Rect.Width - drawW) / 2;
+            int drawX = (int)MainGame.CoreGame2.CarouselOffsetX + Rect.X + (Rect.Width - drawW) / 2;
             int drawY = Rect.Y + (Rect.Height - drawH) / 2;
 
             // Ensure the scissor rectangle doesn't crash FNA by going out of screen bounds
@@ -299,9 +300,9 @@ namespace ArtFramework.UserInterface
 
             // ── 6. Text ───────────────────────────────────────────────────────────
             int textX = x + AccentWidth + TextPadLeft;
-            int titleY = y + (int)(h * 0.26f);
+            int titleY = y + (int)(h * 0.40f);
             int artistY = y + (int)(h * 0.56f);
-            int versionY = y + (int)(h * 0.78f);
+            int versionY = y + (int)(h * 0.85f);
 
             if (!string.IsNullOrEmpty(Title))
                 engine.DrawTextPro(FontName, Title, new Vector2(textX, titleY), Vector2.Zero, 0f, 22f, Color.White);

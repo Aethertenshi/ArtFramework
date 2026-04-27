@@ -7,12 +7,11 @@ using OsuLib;
 
 namespace MainGame;
 
-public class CoreGame : ArtGame
+public class CoreGame2 : ArtGame
 {
     // Constants
     private const float LogoSize = 0.3f;
     private const float BeatSpeed = 1500f;
-    private const float BeatInterval = 0f;
     private const float MaxAngle = 8f;
     private const float RotateDuration = 2f;
     private const float fadeSpeed = 3.7f;    // Adjust for faster/slower fade
@@ -20,14 +19,10 @@ public class CoreGame : ArtGame
     private const float parallaxStrength = 0.03f;
 
     // Audio Processor State
-    private static float previousSampleLeft = 0.0f;
-    private static float previousSampleRight = 0.0f;
     public static float currentMuffle = 1.0f;
     public static float targetMuffle = 1.0f;
 
     // Transition Enums & Structs
-    public enum MainTransitionState { INACTIVE = 0, FADING_IN, WAITING, FADING_OUT }
-
     public struct Halo
     {
         public Vector2 position;
@@ -39,26 +34,27 @@ public class CoreGame : ArtGame
 
     // Game State
     private Halo[] halos = new Halo[MaxHalos];
-    private MainTransitionState transState = MainTransitionState.INACTIVE;
-    private float transTimer = 0.0f;
-    private float transWaitDuration = 0.0f;
-    private float transFadeSpeed = 0.4f;
-    private float bgFadeAlpha = 1.0f; // 0.0 to 1.0
-    private bool transHasSwappedBG = false;
+    private float bgFadeAlpha = 1.0f;
+    private bool _hasStartedOnce = false;
+
+    // Screen transition animation
+    // _menuT:       1 = main menu fully visible, 0 = fully hidden (faded + shrunk)
+    // _carouselSlideT: 0 = carousel off-screen right, 1 = fully in position
+    private float _menuT = 1f;
+    private float _carouselSlideT = 0f;
+    private const float ScreenTransSpeed = 4.5f; // units/sec — lower = slower crossfade
+    public static float CarouselOffsetX = 0f;
 
     // Variables
     private Vector2 offset = Vector2.Zero;
-    private Vector2 size;
     private float rotation = 0;
     private float timer = 0.0f;
     private float fadetimer = 0.0f;
-    private float currentCooldown = 0.0f;
     private float targetAlpha = 255.0f;
     private float transitionProgress = 0.0f;
     private float transitionSpeed = 1.7f;
     private float transitionlogoSpeed = 0.75f;
     private float logoscale = 5.0f;
-    //private float beatLengthSec = 506.7210958154872f / 1000.0f; //315.7894736842105f / 1000.0f; //350.94117647058823f / 1000.0f;
     private float volume = 0f;
     private int lastBeatIndex = -1;
 
@@ -85,22 +81,22 @@ public class CoreGame : ArtGame
     private ScrollCarrousel? carrousel;
     private string? currentBackground;
     private string? lastBackground;
-    private int currentOffset = 0;
 
     // Osu Spesific State
-    OsuBeatmap randomStartingBeatmap = null;
+    OsuBeatmap? lastStartingBeatmap = null;
+    OsuBeatmap? randomStartingBeatmap = null;
 
     // Fade variables for level list
     float fadeTimer = 0f;
     float fadeDuration = .5f;
 
     // Entry Point
-    //public static void Main()
-    //{
-    //    Environment.SetEnvironmentVariable("FNA_GRAPHICS_BACKBUFFER_SCALE_NEAREST", "0");
-    //    using var game = new CoreGame();
-    //    game.Run();
-    //}
+    public static void Main()
+    {
+        Environment.SetEnvironmentVariable("FNA_GRAPHICS_BACKBUFFER_SCALE_NEAREST", "0");
+        using var game = new CoreGame2();
+        game.Run();
+    }
 
     protected override void Init()
     {
@@ -137,9 +133,6 @@ public class CoreGame : ArtGame
         LoadAtlasFont("kanit", "./Content/kanit.json", "./Content/kanit.png");
         LoadAtlasFont("koltav", "./Content/koltav.json", "./Content/koltav.png");
 
-        //UseFont("koltav", fontSize: 64);
-        //UseFont("kanit", fontSize: 64);
-
         UseMusic("bgm", "./sounds/bgm5.mp3");
 
         var scanner = new OsuScanner();
@@ -152,7 +145,7 @@ public class CoreGame : ArtGame
         {
             // Use the library's texture helpers to prepare the background
             UseTexture(bm.GetBackground(), bm.GetBackgroundFullPath());
-            UseMusic($"{bm.AudioFilename}-{bm.Title}-{bm.PreviewTime}", Path.Combine(Path.GetDirectoryName(bm.FilePath), bm.AudioFilename));
+            UseMusic($"{bm.AudioFilename}-{bm.Title}-{bm.PreviewTime}", Path.Combine(Path.GetDirectoryName(bm.FilePath) ?? string.Empty, bm.AudioFilename));
 
             scannedCount++;
             if (rnd.Next(scannedCount) == 0) // Gives every scanned map an equal chance to be picked
@@ -182,6 +175,8 @@ public class CoreGame : ArtGame
                                 title = bm.Title;
                                 previewTime = bm.PreviewTime;
                                 key = $"{audioFilename}-{title}-{previewTime}";
+                                lastStartingBeatmap = randomStartingBeatmap;
+                                randomStartingBeatmap = bm;
 
                                 // 3. Start the new song
                                 selectedBeatmapVolume = 0;
@@ -221,24 +216,19 @@ public class CoreGame : ArtGame
         }
 
         carrousel = new ScrollCarrousel(
-            rect: new Rectangle(1920-currentOffset, 0, 800, 1080),
+            rect: new Rectangle(1120, 0, 800, 1080),
             children: drawables,
             backgroundColor: new Color(0, 0, 0, 0),
             scrollSpeed: 45,
             curveMagnitude: 150);
-
-        size = new Vector2(350, ScreenHeight);
-
-        //SetMusicVolume("bgm", volume);
-        //PlayMusic("bgm");
-        //SeekMusic("bgm", 0.0f);
-        SetMusicVolume(key, volume);
     }
 
     protected override void Update(float dt)
     {
+        if (randomStartingBeatmap == null) return;
+
         float musicTime = GetMusicTimePlayed(key);
-        float beatLengthSec = (float)(randomStartingBeatmap.GetTimingPointAt(musicTime * 1000f, uninheritedOnly: true).BeatLength / 1000.0);
+        float beatLengthSec = (float)(randomStartingBeatmap.GetTimingPointAt(musicTime * 1000f, uninheritedOnly: true)?.BeatLength / 1000.0 ?? 0.5);
         int currentBeatIndex = (int)(musicTime / beatLengthSec);
         float beatProgress = (musicTime % beatLengthSec) / beatLengthSec;
         float t = timer / RotateDuration;
@@ -256,7 +246,7 @@ public class CoreGame : ArtGame
         }
 
         // Level list volume transition
-        if (selectedBeatmapVolume < 0.6f && menuvisible)
+        if (selectedBeatmapVolume < 0.6f && _hasStartedOnce)
         {
             // 1. Add delta time to our running timer
             fadeTimer += dt;
@@ -273,12 +263,12 @@ public class CoreGame : ArtGame
 
             SetMusicVolume(key, selectedBeatmapVolume);
         }
-        else if (!menuvisible && selectedBeatmapVolume > 0.0f)
-        {
-            fadeTimer = 0f;
-            selectedBeatmapVolume = Math.Max(0.0f, selectedBeatmapVolume - (0.45f * dt));
-            SetMusicVolume(key, selectedBeatmapVolume);
-        }
+        //else if (selectedBeatmapVolume > 0.0f)
+        //{
+        //    fadeTimer = 0f;
+        //    selectedBeatmapVolume = Math.Max(0.0f, selectedBeatmapVolume - (0.45f * dt));
+        //    SetMusicVolume(key, selectedBeatmapVolume);
+        //}
 
         // Level list background transition
         if (bgFadeAlpha < 1.0f)
@@ -286,50 +276,50 @@ public class CoreGame : ArtGame
             bgFadeAlpha = Math.Min(1.0f, bgFadeAlpha + (fadeSpeed * dt));
         }
 
-        // Loop the music
-        //if (musicTime >= GetMusicLength("bgm"))
-        //{
-        //    PlayMusic("bgm");
-        //    SeekMusic("bgm", 1.1f);
-        //    lastBeatIndex = -1;
-        //    musicTime = GetMusicTimePlayed("bgm");
-        //    currentBeatIndex = (int)(musicTime / beatLengthSec);
-        //}
-
         if (t > 1.0f) t = 1.5f;
 
-        if (musicTime > (previewTime / 1000f) + 1.5f)
+        if (lastStartingBeatmap != null && randomStartingBeatmap != lastStartingBeatmap)
         {
-            if (fadetimer < 0.0f) fadetimer = 0.0f;
+            musicTime = GetMusicTimePlayed(key);
+            beatLengthSec = (float)(randomStartingBeatmap.GetTimingPointAt(musicTime * 1000f, uninheritedOnly: true)?.BeatLength / 1000.0 ?? 0.5);
+            currentBeatIndex = (int)(musicTime / beatLengthSec);
+            Console.WriteLine($"different: {lastStartingBeatmap.Title}, {randomStartingBeatmap.Title}");
 
-            if (transState == MainTransitionState.WAITING && !transHasSwappedBG)
-            {
-                menuvisible = !menuvisible;
-                transHasSwappedBG = true;
-            }
+            lastStartingBeatmap = randomStartingBeatmap;
+            lastBeatIndex = -1; // Reset beat index to trigger beat event immediately on new song
+        }
+        if (!_hasStartedOnce && musicTime <= (previewTime / 1000f) + 1.5f)
+        {
+            fadetimer = Math.Min(1.0f, fadetimer + (dt * transitionlogoSpeed));
+            currentAlpha = (byte)Easings.EaseCubicInOut(fadetimer, 0.0f, targetAlpha, 1.0f);
+        }
+        else
+        {
+            // The intro is officially over! Lock it out so it never runs again.
+            _hasStartedOnce = true;
 
             if (!menuvisible)
             {
                 fadetimer = Math.Max(0.0f, fadetimer - dt);
                 transitionProgress = Math.Min(3.0f, transitionProgress + (transitionSpeed * dt));
-                volume = Math.Min(0.5f, volume + (0.25f * dt));
-                SetMusicVolume(key, volume);
+                //selectedBeatmapVolume = Math.Min(0.5f, selectedBeatmapVolume + (0.25f * dt));
+                //SetMusicVolume(key, selectedBeatmapVolume);
             }
             else
             {
-                fadetimer = Math.Min(1.0f, fadetimer + dt);
-                volume = Math.Max(0.0f, volume - (0.25f * dt));
-
+                //fadetimer = Math.Min(1.0f, fadetimer + dt);
                 carrousel?.Update(this, dt);
             }
 
             currentAlpha = (byte)Easings.EaseCubicInOut(fadetimer, 0.0f, targetAlpha, 1.0f);
         }
-        else
-        {
-            fadetimer = Math.Min(1.0f, fadetimer + (dt * transitionlogoSpeed));
-            currentAlpha = (byte)Easings.EaseCubicInOut(fadetimer, 0.0f, targetAlpha, 1.0f);
-        }
+
+        // Drive the crossfade animation toward current menuvisible state
+        float animTarget = menuvisible ? 1f : 0f;
+        _carouselSlideT = MoveToward(_carouselSlideT, animTarget, (ScreenTransSpeed/3) * dt);
+        _menuT = MoveToward(_menuT, 1f - animTarget, ScreenTransSpeed * dt);
+
+        if (menuvisible) ShowCursor(); else HideCursor();
 
         // Swing Animation
         if (swingingRight)
@@ -352,39 +342,20 @@ public class CoreGame : ArtGame
             beatpolar = !beatpolar;
         }
 
-        // Menu
-        if (menuvisible)
+        // Input — Space enters level picker, Tab returns to menu
+        if (IsKeyPressed(Keys.Space) && !menuvisible && transitionProgress > 2.7f)
         {
-            fadetimer += dt;
-            float elapsed = Math.Min(fadeTimer, fadeDuration);
-
-            currentOffset = (int)Easings.EaseCubicInOut(elapsed, 0f, 800f, fadeDuration);
-            Console.WriteLine(currentOffset);
-        }
-
-        // Input
-        if (IsKeyPressed(Keys.Space) && !menuvisible && transitionProgress > 2.5f)
-        {
-            //transState = MainTransitionState.FADING_IN;
-            //transFadeSpeed = transitionSpeed / 2f;
-            //transWaitDuration = 0.1f;
-
             menuvisible = true;
             PlaySoundEffect("play_click");
         }
 
-        if (IsKeyPressed(Keys.Tab) && menuvisible && transState == MainTransitionState.INACTIVE)
+        if (IsKeyPressed(Keys.Tab) && menuvisible)
         {
-            //transState = MainTransitionState.FADING_IN;
-            //transFadeSpeed = transitionSpeed / 2f;
-            //transWaitDuration = 0.1f;
-
             menuvisible = false;
             PlaySoundEffect("back_click");
         }
 
         UpdateHalos(dt);
-        UpdateTransition(dt);
     }
 
     protected override void Draw(float dt)
@@ -394,132 +365,121 @@ public class CoreGame : ArtGame
         // ── Get textures ─────────────────────────────────────────────────────
         Texture2D logo = UseTexture("logo", "");
         Texture2D logoMono = UseTexture("logo_mono", "");
-        Texture2D bg = UseTexture("bg", "");
-        Texture2D heartbeat = UseTexture("heartbeat", "");
         Texture2D maskot = UseTexture("maskot", "");
 
         float sW = ScreenWidth;
         float sH = ScreenHeight;
 
-        // ── Build rects ───────────────────────────────────────────────────────
-        var source = new Rectangle(0, 0, logo.Width, logo.Height);
-        var dest = new Rectangle((int)(sW / 2f), (int)(sH / 2f), (int)(logo.Width * (LogoSize * logoscale)), (int)(logo.Height * (LogoSize * logoscale)));
-        var origin = new Vector2(dest.Width / 2f, dest.Height / 2f);
+        // ── Eased animation values ────────────────────────────────────────────
+        // EaseOutCubic: fast start, smooth stop — feels snappy for UI slides
+        float menuEased = EaseOutCubic(_menuT);
+        float carouselEased = EaseOutCubic(_carouselSlideT);
 
-        var dest_mono = new Rectangle((int)(sW / 2f), (int)(sH / 2f), (int)(logoMono.Width * LogoSize), (int)(logoMono.Height * LogoSize));
-        var origin_mono = new Vector2(dest_mono.Width / 2f, dest_mono.Height / 2f);
+        // ── Logo scale: beats drive logoscale, _menuT drives the shrink-on-exit
+        // Shrinks toward 0.88× when fading out — subtle but noticeable
+        float menuScaleMult = 0.88f + (menuEased * 0.12f);   // 0.88 → 1.0
+        float menuAlpha = menuEased;                       // 0 → 1
+        byte menuAlphaByte = (byte)(menuAlpha * 255f);
 
-        var maskot_source = new Rectangle(0, 0, maskot.Width, maskot.Height);
-        var maskot_dest = new Rectangle((int)(sW / 2f), (int)(sH / 2f), (int)((maskot.Width * 0.18f) * logoscale), (int)((maskot.Height * 0.18f) * logoscale));
-        var maskot_origin = new Vector2(maskot_dest.Width / 2f, maskot_dest.Height / 2f);
-
-        var bg_origin = new Vector2(bg.Width * 1.15f / 2f, bg.Height * 1.15f / 2f);
-        var bg_src = new Rectangle(0, 0, bg.Width, bg.Height);
-        var bg_dest = new Rectangle((int)(sW / 2f), (int)(sH / 2f), (int)(bg.Width * 1.15f), (int)(bg.Height * 1.15f));
-
-        var hb_origin = new Vector2((heartbeat.Width + 100) / 2f, (heartbeat.Height + 100) / 2f);
-        var hb_src = new Rectangle(0, 0, heartbeat.Width, heartbeat.Height);
-        var hb_dest = new Rectangle((int)(sW / 2f), (int)(sH / 2f), heartbeat.Width + 100, heartbeat.Height + 100);
-
-        Vector2 textSize = MeasureText("koltav", "Press [SPACE] To Start!", 25.0f * logoscale);
-        // NOTE: Raylib Color(r,g,b,a) with floats uses 0-255 range.
-        // FNA Color(float,float,float,float) uses 0-1 range — byte alpha divided by 255.
-        var fadeTint = new Color(255, 255, 255, (int)currentAlpha);
-
-        if (!menuvisible)
+        // ── LAYER 1: Main Menu ────────────────────────────────────────────────
+        // Always drawn; fades + shrinks toward 0 when menuvisible=true
+        if (menuAlpha > 0.01f)
         {
             MouseState mouse = Mouse.GetState();
-            int paddingX = (int)(1920 * parallaxStrength);
-            int paddingY = (int)(1080 * parallaxStrength);
-            float mouseX = mouse.X;
-            float mouseY = mouse.Y;
-            float offsetX = ((1920 / 2f) - mouseX) * parallaxStrength;
-            float offsetY = ((1080 / 2f) - mouseY) * parallaxStrength;
+            int paddingbgX = (int)(1920 * parallaxStrength);
+            int paddingbgY = (int)(1080 * parallaxStrength);
+            float offsetX = ((1920 / 2f) - mouse.X) * parallaxStrength;
+            float offsetY = ((1080 / 2f) - mouse.Y) * parallaxStrength;
 
             Rectangle parallaxRect = new Rectangle(
-                -paddingX + (int)offsetX,
-                -paddingY + (int)offsetY,
-                1920 + (paddingX * 2),
-                1080 + (paddingY * 2)
+                -paddingbgX + (int)offsetX,
+                -paddingbgY + (int)offsetY,
+                1920 + (paddingbgX * 2),
+                1080 + (paddingbgY * 2)
             );
 
-            byte bgAlpha = (byte)Math.Clamp(100 / Math.Clamp(logoscale, 1.0f, 1.015f), 0, 100);
-            DrawCover(currentBackground, parallaxRect, new Color(255, 255, 255, bgAlpha));
+            byte bgAlpha = (byte)(Math.Clamp(150 / Math.Clamp(logoscale, 1.0f, 1.015f), 0, 150) * menuAlpha);
+            DrawCover(currentBackground ?? string.Empty, parallaxRect, new Color(255, 255, 255, bgAlpha));
 
-            float centerY = ScreenHeight / 2f;
-            float centerX = ScreenWidth / 2f;
+            float centerY = sH / 2f;
+            float centerX = sW / 2f;
 
-            // 1. Calculate where the tail should start (don't go below 0)
-            float startX = Math.Max(-heartbeatTrailLength/2, _currentX - heartbeatTrailLength);
-
-            // 2. Set the initial previousPoint to the start of the trail, NOT 0
+            // Heartbeat line — faded by menuAlpha
+            float startX = Math.Max(-heartbeatTrailLength / 2, _currentX - heartbeatTrailLength);
             float startYOffset = GetHeartbeatOffset(startX, centerX);
             Vector2 previousPoint = new Vector2(startX, centerY + startYOffset);
 
-            // 3. Draw only the segment between startX and the current PenX
             for (float x = startX + 2; x <= _currentX; x += 2)
             {
                 float yOffset = GetHeartbeatOffset(x, centerX);
                 Vector2 currentPoint = new Vector2(x, centerY + yOffset);
 
-                // --- Bonus: Fading Tail Effect ---
-                // Calculate how close this segment is to the end of the trail to fade it out
                 float distanceFromTail = x - startX;
-                float alpha = distanceFromTail / heartbeatTrailLength;
-
-                // Premultiply the color so it fades out cleanly
-                byte alphaByte = (byte)(255 * alpha);
-                Color segmentColor = new Color(112, 193, 255, alphaByte);
-                // ---------------------------------
-
-                DrawLine(this.SpriteBatch, _pixel, previousPoint, currentPoint, segmentColor, 18f);
+                float trailAlpha = distanceFromTail / heartbeatTrailLength;
+                byte alphaByte = (byte)(255 * trailAlpha * menuAlpha);
+                DrawLine(this.SpriteBatch, _pixel!, previousPoint, currentPoint, new Color(112, 193, 255, alphaByte), 18f);
 
                 previousPoint = currentPoint;
             }
 
-            DrawHalos();
-            DrawTexturePro("logo", source, dest, origin, rotation, Color.White);
+            DrawHalos(menuAlpha);
 
+            // Logo — scaled by beat animation × shrink factor
+            float scaledLogoSize = LogoSize * logoscale * menuScaleMult;
+            var source = new Rectangle(0, 0, logo.Width, logo.Height);
+            var dest = new Rectangle((int)(sW / 2f), (int)(sH / 2f),
+                                          (int)(logo.Width * scaledLogoSize),
+                                          (int)(logo.Height * scaledLogoSize));
+            var origin = new Vector2(dest.Width / 2f, dest.Height / 2f);
+
+            float monoSize = LogoSize * menuScaleMult;
+            var dest_mono = new Rectangle((int)(sW / 2f), (int)(sH / 2f),
+                                           (int)(logoMono.Width * monoSize),
+                                           (int)(logoMono.Height * monoSize));
+            var origin_mono = new Vector2(dest_mono.Width / 2f, dest_mono.Height / 2f);
+
+            var fadeTint = new Color(255, 255, 255, (int)currentAlpha);
+            var maskotTint = new Color(255, 255, 255, menuAlphaByte);
+
+            // "Press [SPACE]" prompt
+            Vector2 textSize = MeasureText("koltav", "Press [SPACE] To Start!", 25.0f * logoscale * menuScaleMult);
             Vector2 centerPos = new Vector2(sW / 2f, sH / 1.25f);
+            float paddingX = 25f;
+            float paddingY = 15f;
 
-            // 2. Draw Background Rectangle (Slightly Larger than Text, Centered on the Same Point)
+            int promptAlpha = (int)(Math.Clamp(255 - currentAlpha * 1.5f, 0, 255) * menuAlpha);
             DrawRectangle(
                 centerPos.X - (textSize.X + paddingX) / 2f,
                 centerPos.Y - (textSize.Y + paddingY + 3.2f),
                 textSize.X + paddingX,
                 textSize.Y + paddingY,
-                new Color(55, 72, 96, (int)Math.Clamp(255 - currentAlpha * 1.5f, 0, 255))
+                new Color(55, 72, 96, promptAlpha)
             );
-
-            // 3. Draw Text (Positioned exactly at Center)
-            DrawTextPro(
-                "koltav",
-                "Press [SPACE] To Start!",
-                centerPos,             // Use the exact same centerPos
-                textSize / 2f,       // Origin is half of text size to center it on pos
-                0.0f,
-                25.0f * logoscale,
-                new Color(162, 215, 255, (int)Math.Clamp(255 - currentAlpha * 1.5f, 0, 255)),
+            DrawTextPro("koltav", "Press [SPACE] To Start!", centerPos, textSize / 2f, 0.0f,
+                25.0f * logoscale * menuScaleMult,
+                new Color(162, 215, 255, promptAlpha),
                 strokeWidth: 3f,
-                strokeColor: new Color(39, 54, 74, (int)Math.Clamp(255 - currentAlpha * 1.5f, 0, 255))
-            );
-
-            //RenderGrid(this, transitionProgress, 80, Color.Black, true, true);
+                strokeColor: new Color(39, 54, 74, promptAlpha));
+                
+            DrawTexturePro("logo", source, dest, origin, rotation, new Color(255, 255, 255, promptAlpha));
             RenderGridHorizontal(this, transitionProgress, 80, Color.Black, true, true);
-            DrawTexturePro("logo_mono", source, dest_mono, origin_mono, rotation, fadeTint);
-            HideCursor();
+            DrawTexturePro("logo_mono", new Rectangle(0, 0, logoMono.Width, logoMono.Height),
+                           dest_mono, origin_mono, rotation,
+                           new Color(255, 255, 255, (byte)(fadeTint.A * menuAlpha)));
         }
-        else
+
+        // ── LAYER 2: Level Picker ─────────────────────────────────────────────
+        // Slides in from the right; carousel starts off-screen and moves to its rest position.
+        // carouselOffsetX: how many pixels to the right of its final position the carousel starts.
+        if (carouselEased > 0.01f)
         {
             ShowCursor();
 
             MouseState mouse = Mouse.GetState();
             int paddingX = (int)(1920 * parallaxStrength);
             int paddingY = (int)(1080 * parallaxStrength);
-            float mouseX = mouse.X;
-            float mouseY = mouse.Y;
-            float offsetX = ((1920/2f) - mouseX) * parallaxStrength;
-            float offsetY = ((1080/2f) - mouseY) * parallaxStrength;
+            float offsetX = ((1920 / 2f) - mouse.X) * parallaxStrength;
+            float offsetY = ((1080 / 2f) - mouse.Y) * parallaxStrength;
 
             Rectangle parallaxRect = new Rectangle(
                 -paddingX + (int)offsetX,
@@ -528,38 +488,57 @@ public class CoreGame : ArtGame
                 1080 + (paddingY * 2)
             );
 
+            byte bgLayerAlpha = (byte)(carouselEased * 150f);
+
             if (lastBackground != null && bgFadeAlpha < 1.0f)
             {
-                byte oldAlpha = (byte)((1.0f - bgFadeAlpha) * 100);
+                byte oldAlpha = (byte)((1.0f - bgFadeAlpha) * bgLayerAlpha);
                 DrawCover(lastBackground, parallaxRect, new Color(255, 255, 255, oldAlpha));
             }
 
             if (currentBackground != null)
             {
-                byte newAlpha = (byte)(bgFadeAlpha * 100);
+                byte newAlpha = (byte)(bgFadeAlpha * bgLayerAlpha);
                 DrawCover(currentBackground, parallaxRect, new Color(255, 255, 255, newAlpha));
             }
-            carrousel?.Draw(this);
-        }
 
-        DrawTransitionOverlay(maskot_source, maskot_dest, maskot_origin);
+            // Slide the carousel: offset shrinks from 800px → 0 as carouselEased goes 0 → 1
+            float carouselOffsetX = (1f - carouselEased) * 800f;
+            CarouselOffsetX = carouselOffsetX;
+            //SpriteBatch.End();
+            //SpriteBatch.Begin(SpriteSortMode.Deferred, BlendState.NonPremultiplied,
+            //                  SamplerState.LinearClamp, null, null, null,
+            //                  Matrix.CreateTranslation(carouselOffsetX, 0f, 0f));
+            carrousel?.Draw(this);
+            //OpenSpriteBatch(); // restore engine's normal batch state
+        }
 
         // Debugging
         DrawTextPro("koltav", $"FrameTime: {GetFrameTime():F4}", new Vector2(20, ScreenHeight - 70), Vector2.Zero, 0.0f, 15.0f,
-                new Color(162, 215, 255, (int)Math.Clamp(255, 0, 255)),
-                strokeWidth: 1.5f,
-                strokeColor: new Color(39, 54, 74, (int)Math.Clamp(255, 0, 255)));
+                new Color(162, 215, 255, 255), strokeWidth: 1.5f, strokeColor: new Color(39, 54, 74, 255));
         DrawTextPro("koltav", $"FPS: {GetFPS()}", new Vector2(20, ScreenHeight - 50), Vector2.Zero, 0.0f, 15.0f,
-                new Color(162, 215, 255, (int)Math.Clamp(255, 0, 255)),
-                strokeWidth: 1.5f,
-                strokeColor: new Color(39, 54, 74, (int)Math.Clamp(255, 0, 255)));
+                new Color(162, 215, 255, 255), strokeWidth: 1.5f, strokeColor: new Color(39, 54, 74, 255));
         DrawTextPro("koltav", "Internal Development v4.22.26(iFNA) [Do not distribute]", new Vector2(20, ScreenHeight - 30), Vector2.Zero, 0.0f, 15.0f,
-                new Color(162, 215, 255, (int)Math.Clamp(255, 0, 255)),
-                strokeWidth: 1.5f,
-                strokeColor: new Color(39, 54, 74, (int)Math.Clamp(255, 0, 255)));
+                new Color(162, 215, 255, 255), strokeWidth: 1.5f, strokeColor: new Color(39, 54, 74, 255));
     }
 
     // ── Math & Effects ────────────────────────────────────────────────────────
+
+    // Smooth step from a toward b at a fixed speed, never overshooting
+    private static float MoveToward(float a, float b, float speed)
+    {
+        float delta = b - a;
+        if (MathF.Abs(delta) <= speed) return b;
+        return a + MathF.Sign(delta) * speed;
+    }
+
+    // Fast-out easing: snappy start, smooth landing
+    private static float EaseOutCubic(float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return 1f - MathF.Pow(1f - t, 4f); // Power of 4 (Quartic) is the smoothest!
+        //return t == 1f ? 1f : 1f - MathF.Pow(2f, -10f * t);
+    }
 
     private float GetBeatEasedValue(float progress)
     {
@@ -592,86 +571,19 @@ public class CoreGame : ArtGame
         }
     }
 
-    private void DrawHalos()
+    private void DrawHalos(float alphaMultiplier = 1f)
     {
         for (int i = 0; i < MaxHalos; i++)
         {
             if (!halos[i].active) continue;
 
-            // Replaces Raylib.Fade — use our static Fade helper
-            Color glowColor = Fade(new Color(112, 193, 255, 255), halos[i].alpha * 0.3f);
+            float a = halos[i].alpha * alphaMultiplier;
+            Color glowColor = Fade(new Color(112, 193, 255, 255), a * 0.3f);
             DrawRing(halos[i].position, halos[i].radius - 5f, halos[i].radius + halos[i].thickness + 15f, 0, 360, 64, glowColor);
 
-            Color coreColor = Fade(new Color(162, 215, 255, 255), halos[i].alpha);
+            Color coreColor = Fade(new Color(162, 215, 255, 255), a);
             DrawRing(halos[i].position, halos[i].radius, halos[i].radius + halos[i].thickness, 0, 360, 64, coreColor);
         }
     }
 
-    private void UpdateTransition(float dt)
-    {
-        if (transState == MainTransitionState.INACTIVE) return;
-        transTimer += dt;
-    }
-
-    private void DrawTransitionOverlay(Rectangle maskot_source, Rectangle maskot_dest, Vector2 maskot_origin)
-    {
-        if (transState == MainTransitionState.INACTIVE) return;
-
-        float t = Math.Min(transTimer / transFadeSpeed, 1.0f);
-        float gridProgress = t * 1.5f;
-        float currentAlphaF = 255.0f;
-
-        if (transState == MainTransitionState.FADING_IN)
-            currentAlphaF = Easings.EaseCubicInOut(t, 0.0f, 255.0f, 1.2f);
-        else if (transState == MainTransitionState.FADING_OUT)
-            currentAlphaF = Easings.EaseCubicInOut(1.0f - t, 0.0f, 255.0f, 1.0f);
-
-        byte alphaByte = (byte)Math.Clamp(currentAlphaF, 0, 255);
-
-        const string loadingText = "Stella:\nPlaying in Offline Mode! Please wait~";
-        const float fontSize = 22.0f;
-
-        Vector2 connectingSize = MeasureText("kanit", loadingText, fontSize);
-        Vector2 textPos = new Vector2(ScreenWidth / 2f, ScreenHeight / 1.25f);
-        Vector2 textOrigin = new Vector2(connectingSize.X / 2.0f, connectingSize.Y / 2.0f);
-
-        var bgColor = new Color(70, 103, 141, 255);
-        var mascotTint = new Color(255, 255, 255, (int)alphaByte);
-        var textTint = new Color(179, 193, 218, (int)alphaByte);
-
-        switch (transState)
-        {
-            case MainTransitionState.FADING_IN:
-                RenderGridHorizontal(this, gridProgress, 80, bgColor, false, true);
-                if (transTimer >= transFadeSpeed)
-                {
-                    transState = MainTransitionState.WAITING;
-                    transTimer = 0.0f;
-                }
-                break;
-
-            case MainTransitionState.WAITING:
-                DrawRectangle(0, 0, ScreenWidth, ScreenHeight, bgColor);
-                transHasSwappedBG = true;
-                if (transTimer >= transWaitDuration)
-                {
-                    transState = MainTransitionState.FADING_OUT;
-                    transTimer = 0.0f;
-                }
-                break;
-
-            case MainTransitionState.FADING_OUT:
-                RenderGridHorizontal(this, gridProgress, 80, bgColor, true, true);
-                transHasSwappedBG = false;
-                if (transTimer >= transFadeSpeed)
-                {
-                    transState = MainTransitionState.INACTIVE;
-                    transTimer = 0.0f;
-                }
-                break;
-        }
-
-        DrawTexturePro("maskot", maskot_source, maskot_dest, maskot_origin, rotation, mascotTint);
-        DrawTextPro("kanit", loadingText, textPos, textOrigin, 0.0f, fontSize, textTint, 3f, new Color(39, 54, 74, (int)alphaByte));
-    }
 }
