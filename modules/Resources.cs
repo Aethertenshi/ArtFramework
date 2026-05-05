@@ -1,9 +1,8 @@
 ﻿using ArtFramework.AtlasParser;
 using ManagedBass;
-using Microsoft.Xna.Framework.Audio;
+using ManagedBass.Fx;
+using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
-using Microsoft.Xna.Framework.Media;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace ArtFramework;
 public partial class ArtGame
@@ -27,16 +26,38 @@ public partial class ArtGame
     }
 
     // Music — Bass stays the same, FNA's built-in MediaPlayer is too limited
+    public void DeleteMusic(string musicName)
+    {
+        if (_musics.ContainsKey(musicName))
+        {
+            _musics.Remove(musicName);
+        }
+    }
     public int UseMusic(string musicName, string musicPath)
     {
         if (!_musics.ContainsKey(musicName))
         {
-            int handle = Bass.CreateStream(musicPath, 0, 0, BassFlags.Default);
+            // 1. Create a DECODING stream (required for BASS_FX)
+            int decoder = Bass.CreateStream(musicPath, 0, 0, BassFlags.Decode);
 
-            if (handle == 0)
-                Console.WriteLine($"Failed to load {musicName}: {Bass.LastError}");
+            if (decoder == 0)
+            {
+                Console.WriteLine($"Failed to load decoder for {musicName}: {Bass.LastError}");
+                return 0;
+            }
 
-            _musics.Add(musicName, handle);
+            // 2. Create the Tempo stream from the decoder
+            // BassFlags.FxFreeSource ensures that when we free the tempo stream, the decoder is freed too
+            int tempoHandle = BassFx.TempoCreate(decoder, BassFlags.FxFreeSource);
+
+            if (tempoHandle == 0)
+            {
+                Console.WriteLine($"Failed to create tempo stream for {musicName}: {Bass.LastError}");
+                Bass.StreamFree(decoder);
+                return 0;
+            }
+
+            _musics.Add(musicName, tempoHandle);
         }
         return _musics[musicName];
     }
@@ -67,6 +88,38 @@ public partial class ArtGame
             _shaders.Add(shaderName, new Effect(GraphicsDevice, ReadBytes(stream)));
         }
         return _shaders[shaderName];
+    }
+    public void SetBlurEffectParameters(Effect blurEffect, float dx, float dy, float blurAmount)
+    {
+        int kernelSize = 15;
+        Vector2[] offsets = new Vector2[kernelSize];
+        float[] weights = new float[kernelSize];
+
+        // Calculate weights using Gaussian formula
+        float sigma = blurAmount;
+        float totalWeight = 0.0f;
+
+        for (int i = 0; i < kernelSize; i++)
+        {
+            // Distance from the center pixel (center is index 7)
+            float distance = i - 7;
+
+            // Apply Gaussian formula
+            weights[i] = (float)((1.0 / Math.Sqrt(2 * Math.PI * sigma * sigma)) * Math.Exp(-(distance * distance) / (2 * sigma * sigma)));
+
+            totalWeight += weights[i];
+        }
+
+        // Normalize weights so they sum to exactly 1.0 (prevents the image from brightening or darkening)
+        for (int i = 0; i < kernelSize; i++)
+        {
+            weights[i] /= totalWeight;
+            // Apply the direction vector (dx, dy) and distance
+            offsets[i] = new Vector2(dx * (i - 7), dy * (i - 7));
+        }
+
+        blurEffect.Parameters["SampleWeights"].SetValue(weights);
+        blurEffect.Parameters["SampleOffsets"].SetValue(offsets);
     }
 
     // Cleanup — call this when your game exits

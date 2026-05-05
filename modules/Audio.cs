@@ -8,12 +8,19 @@ public abstract partial class ArtGame : Game
 {
     // Caches
     private List<int> _audioCallbacks = new();
+    private float _audioLatency = 0f;
 
     // Initializes the audio engine.
     public void AudioEngine()
     {
-        if (!Bass.Init(-1, 44100, DeviceInitFlags.Default, IntPtr.Zero))
+        Bass.Configure(Configuration.PlaybackBufferLength, 20);
+        Bass.Configure(Configuration.UpdatePeriod, 5);
+
+        if (!Bass.Init(-1, 44100, DeviceInitFlags.Latency, IntPtr.Zero))
             Console.WriteLine($"BASS Init Error: {Bass.LastError}");
+
+        Bass.GetInfo(out BassInfo info);
+        _audioLatency = info.Latency / 1000f;
     }
 
     public void AudioCleanup()
@@ -57,6 +64,13 @@ public abstract partial class ArtGame : Game
             Bass.ChannelSetAttribute(handle, ChannelAttribute.Volume, volume);
     }
 
+    public double GetMusicVolume(string musicName)
+    {
+        if (_musics.TryGetValue(musicName, out int handle))
+            return Bass.ChannelGetAttribute(handle, ChannelAttribute.Volume);
+        return 0;
+    }
+
     public float GetMusicLength(string musicName)
     {
         if (_musics.TryGetValue(musicName, out int handle))
@@ -72,7 +86,9 @@ public abstract partial class ArtGame : Game
         if (_musics.TryGetValue(musicName, out int handle))
         {
             long bytePosition = Bass.ChannelGetPosition(handle);
-            return (float)Bass.ChannelBytes2Seconds(handle, bytePosition);
+            float decodeTime = (float)Bass.ChannelBytes2Seconds(handle, bytePosition);
+
+            return Math.Max(0f, decodeTime - _audioLatency);
         }
         return 0f;
     }

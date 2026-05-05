@@ -12,6 +12,17 @@ namespace ArtFramework.UserInterface
         void Update(ArtGame engine, float dt);
         void Draw(ArtGame engine);
     }
+    public enum Alignment
+    {
+        Start,
+        Center,
+        End
+    }
+    public enum LayoutDirection
+    {
+        Vertical,
+        Horizontal
+    }
 
     public class ScrollCarrousel : IDrawable
     {
@@ -125,39 +136,61 @@ namespace ArtFramework.UserInterface
             _prevMouse = mouse;
         }
 
-            private void Layout(ArtGame engine)
+        public void CenterOn(IDrawable targetChild)
+        {
+            // Find the vertical center of the carousel's bounds
+            float carouselCenterY = Rect.Height * 0.5f;
+            float currentYOffset = Padding.Y;
+
+            foreach (var child in Children)
             {
-                float centerY = Rect.Y + Rect.Height * 0.5f;
-                float cursorY = Rect.Y + Padding.Y + _scroll;
-
-                // Unused in the final calculation but good to have if you want to clamp later
-                // float screenW = engine.ScreenWidth; 
-
-                foreach (var child in Children)
+                if (child == targetChild)
                 {
-                    // Get the struct, modify it, put it back
-                    Rectangle r = child.Rect;
-
-                    // XNA Rectangles require Ints
-                    r.Y = (int)cursorY;
-
-                    // Normalised distance from centre [0 = centre, 1 = carousel edge, >1 = beyond].
-                    float t = Math.Abs((r.Y + r.Height * 0.5f) - centerY) / (Rect.Height * 0.5f);
-
-                    // Quadratic falloff: 1 at centre, 0 at edge.
-                    float curve = MathF.Pow(MathHelper.Clamp(1f - t, 0f, 1f), 2f);
-
-                    // Centre button sits at Rect.X (left edge of the carousel).
-                    // Farther buttons slide right by however much curve they have lost.
-                    r.X = (int)(((Rect.X + Rect.Width) - r.Width) + CurveMagnitude * (1f - curve));
-
-                    // Reassign the modified rect
-                    child.Rect = r;
-
-                    cursorY += r.Height + Padding.Y;
+                    // We found the clicked button! 
+                    // Calculate the exact _targetScroll needed to align their centers.
+                    float childCenterY = currentYOffset + (child.Rect.Height * 0.5f);
+                    _targetScroll = carouselCenterY - childCenterY;
+                    break;
                 }
+                // Add height + padding to track the raw Y offset of the next button
+                currentYOffset += child.Rect.Height + Padding.Y;
             }
+        }
+
+        private void Layout(ArtGame engine)
+        {
+            float centerY = Rect.Y + Rect.Height * 0.5f;
+            float cursorY = Rect.Y + Padding.Y + _scroll;
+
+            // Unused in the final calculation but good to have if you want to clamp later
+            // float screenW = engine.ScreenWidth; 
+
+            foreach (var child in Children)
+            {
+                // Get the struct, modify it, put it back
+                Rectangle r = child.Rect;
+
+                // XNA Rectangles require Ints
+                r.Y = (int)cursorY;
+
+                // Normalised distance from centre [0 = centre, 1 = carousel edge, >1 = beyond].
+                float t = Math.Abs((r.Y + r.Height * 0.5f) - centerY) / (Rect.Height * 0.5f);
+
+                // Quadratic falloff: 1 at centre, 0 at edge.
+                float curve = MathF.Pow(MathHelper.Clamp(1f - t, 0f, 1f), 2f);
+
+                // Centre button sits at Rect.X (left edge of the carousel).
+                // Farther buttons slide right by however much curve they have lost.
+                r.X = (int)(((Rect.X + Rect.Width) - r.Width) + CurveMagnitude * (1f - curve));
+
+                // Reassign the modified rect
+                child.Rect = r;
+
+                cursorY += r.Height + Padding.Y;
+            }
+        }
     }
+
     public class LevelButton : IDrawable
     {
         // ── Layout ────────────────────────────────────────────────────────────────
@@ -370,6 +403,441 @@ namespace ArtFramework.UserInterface
                 (byte)Math.Min(c.B + amount, 255),
                 c.A
             );
+        }
+    }
+
+    public class Slider : IDrawable
+    {
+        public Rectangle Rect { get; set; }
+        public float MinValue { get; set; }
+        public float MaxValue { get; set; }
+        public float Value { get; set; }
+
+        private int _headWidth;
+        private bool _isDragging;
+        private MouseState _prevMouseState;
+
+        // Refined constructor: 'bounds' dictates the interactive hit-box and position.
+        public Slider(Rectangle bounds, float minValue, float maxValue, float initialValue, int headWidth = 10)
+        {
+            Rect = bounds;
+            MinValue = minValue;
+            MaxValue = maxValue;
+            Value = MathHelper.Clamp(initialValue, minValue, maxValue);
+            _headWidth = headWidth;
+            _prevMouseState = Mouse.GetState();
+        }
+
+        public void Update(ArtGame engine, float dt)
+        {
+            MouseState mouseState = Mouse.GetState();
+
+            // 1. Check if the user just clicked inside the slider bounds
+            if (mouseState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+            {
+                if (Rect.Contains(new Point(mouseState.X, mouseState.Y)))
+                {
+                    _isDragging = true;
+                }
+            }
+
+            // 2. Stop dragging if the mouse button is released
+            if (mouseState.LeftButton == ButtonState.Released)
+            {
+                _isDragging = false;
+            }
+
+            // 3. If actively dragging, calculate the new value based on mouse X position
+            if (_isDragging)
+            {
+                // Normalize the mouse X relative to the slider's width (0.0 to 1.0)
+                float percent = (float)(mouseState.X - Rect.X) / Rect.Width;
+                percent = MathHelper.Clamp(percent, 0f, 1f);
+
+                // Lerp the value between Min and Max
+                Value = MathHelper.Lerp(MinValue, MaxValue, percent);
+            }
+
+            _prevMouseState = mouseState;
+        }
+
+        public void Draw(ArtGame engine)
+        {
+            // Calculate percentages to place the head correctly
+            float percent = (Value - MinValue) / (MaxValue - MinValue);
+
+            // Draw the track (a thin line centered vertically in the Rect)
+            float trackHeight = 4f;
+            float trackY = Rect.Y + (Rect.Height / 2f) - (trackHeight / 2f);
+            engine.DrawRectangle(Rect.X, trackY, Rect.Width, trackHeight, Color.DarkGray);
+
+        // Calculate the head's X position, offsetting by headWidth so it doesn't spill out of bounds
+        float headX = Rect.X + (percent * (Rect.Width - _headWidth));
+
+            // Draw the slider head. Changes color slightly when being actively dragged.
+            Color headColor = _isDragging ? Color.LightGray : Color.White;
+            engine.DrawRectangle(headX, Rect.Y, _headWidth, Rect.Height, headColor);
+        }
+    }
+
+    public class ListFrame : IDrawable
+    {
+        public List<IDrawable> Children { get; set; }
+        public float Padding { get; set; }
+        public Alignment Alignment { get; set; }
+        public Rectangle Rect { get; set; }
+        public Color Color { get; set; }
+        public LayoutDirection Direction { get; set; }
+
+        public ListFrame(
+            Rectangle rect,
+            List<IDrawable> children,
+            float padding = 5f,
+            Alignment alignment = Alignment.Start,
+            LayoutDirection layoutDirection = LayoutDirection.Vertical,
+            Color color = default)
+        {
+            Rect = rect;
+            Children = children;
+            Padding = padding;
+            Alignment = alignment;
+            Color = color;
+            Direction = layoutDirection;
+
+            // Arrange the children immediately upon creation
+            PerformLayout();
+        }
+
+        // The layout engine: computes the spatial arrangement of the children
+        public void PerformLayout()
+        {
+            // Track the running cursor for both axes
+            float currentX = Rect.X;
+            float currentY = Rect.Y;
+
+            for (int i = 0; i < Children.Count; i++)
+            {
+                var child = Children[i];
+                Rectangle childRect = child.Rect;
+
+                int newX = Rect.X;
+                int newY = Rect.Y;
+
+                if (Direction == LayoutDirection.Vertical)
+                {
+                    // === VERTICAL LAYOUT ===
+                    // Stack items down the Y axis
+                    newY = (int)currentY;
+
+                    // Align items along the X axis
+                    switch (Alignment)
+                    {
+                        case Alignment.Start:
+                            newX = Rect.X;
+                            break;
+                        case Alignment.Center:
+                            newX = Rect.X + (Rect.Width / 2) - (childRect.Width / 2);
+                            break;
+                        case Alignment.End:
+                            newX = (Rect.X + Rect.Width) - childRect.Width;
+                            break;
+                    }
+
+                    // Advance the Y cursor for the next item
+                    currentY += childRect.Height + Padding;
+                }
+                else if (Direction == LayoutDirection.Horizontal)
+                {
+                    // === HORIZONTAL LAYOUT ===
+                    // Stack items across the X axis
+                    newX = (int)currentX;
+
+                    // Align items along the Y axis. 
+                    // In a horizontal context: Left = Top, Center = Middle, Right = Bottom
+                    switch (Alignment)
+                    {
+                        case Alignment.Start: // Top aligned
+                            newY = Rect.Y;
+                            break;
+                        case Alignment.Center: // Middle aligned
+                            newY = Rect.Y + (Rect.Height / 2) - (childRect.Height / 2);
+                            break;
+                        case Alignment.End: // Bottom aligned
+                            newY = (Rect.Y + Rect.Height) - childRect.Height;
+                            break;
+                    }
+
+                    // Advance the X cursor for the next item
+                    currentX += childRect.Width + Padding;
+                }
+
+                // Apply the newly calculated position
+                child.Rect = new Rectangle(newX, newY, childRect.Width, childRect.Height);
+            }
+        }
+
+        public void Update(ArtGame engine, float dt)
+        {
+            // Optional: If you plan on adding/removing items dynamically or resizing the frame 
+            // during gameplay, you should call PerformLayout() here so it constantly recalculates.
+
+            foreach (var child in Children)
+                child.Update(engine, dt);
+        }
+
+        public void Draw(ArtGame engine)
+        {
+            engine.DrawRectangle(Rect.X, Rect.Y, Rect.Width, Rect.Height, Color);
+            foreach (var child in Children)
+                child.Draw(engine);
+        }
+    }
+
+    public class IconButton : IDrawable
+    {
+        public Rectangle Rect { get; set; }
+        public Texture2D IconTexture { get; set; }
+        public Action<IconButton>? OnAction { get; set; }
+
+        public Alignment Alignment { get; set; }
+        public float Padding { get; set; }
+
+        // Optional colors to help style the hover effect
+        public Color BackgroundColor { get; set; } = Color.Black;
+        public Color HoverBackgroundColor { get; set; } = new Color(10, 10, 10);
+        public Color IconColor { get; set; } = Color.White;
+        public Color HoverIconColor { get; set; } = Color.LightGray;
+
+        private bool _isClicked;
+        private bool _isHovered;
+        private MouseState _prevMouseState;
+
+        public IconButton(
+            Rectangle rect,
+            Texture2D iconTexture,
+            float padding = 10f,
+            Alignment alignment = Alignment.Center,
+            Action<IconButton>? onAction = null,
+            Color bgColor = default,
+            Color hoverBgColor = default)
+        {
+            Rect = rect;
+            IconTexture = iconTexture;
+            Padding = padding;
+            Alignment = alignment;
+            BackgroundColor = bgColor;
+            HoverBackgroundColor = hoverBgColor;
+            OnAction = onAction;
+            _prevMouseState = Mouse.GetState();
+        }
+
+        public void Update(ArtGame engine, float dt)
+        {
+            var mouseState = Mouse.GetState();
+            var mousePos = new Point(mouseState.X, mouseState.Y);
+
+            _isHovered = Rect.Contains(mousePos);
+
+            bool isMousePressed = mouseState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released;
+            _isClicked = _isHovered && isMousePressed;
+
+            if (_isClicked)
+                OnAction?.Invoke(this);
+
+            _prevMouseState = mouseState;
+        }
+
+        public void Draw(ArtGame engine)
+        {
+            // 1. Draw the button background
+            Color bgColor = _isHovered ? HoverBackgroundColor : BackgroundColor;
+            engine.DrawRectangle(Rect.X, Rect.Y, Rect.Width, Rect.Height, bgColor);
+
+            if (IconTexture == null) return;
+
+            // 2. Calculate the maximum available area for the icon inside the padding
+            float availWidth = Rect.Width - (Padding * 2);
+            float availHeight = Rect.Height - (Padding * 2);
+
+            // Find the scale required to fit the icon while preserving aspect ratio
+            float scale = Math.Min(availWidth / IconTexture.Width, availHeight / IconTexture.Height);
+
+            int drawW = (int)(IconTexture.Width * scale);
+            int drawH = (int)(IconTexture.Height * scale);
+
+            // 3. Vertically center the icon. If the height is the limiting factor (as with most buttons), 
+            // this naturally creates perfect symmetrical padding on the top and bottom.
+            int drawY = Rect.Y + (Rect.Height - drawH) / 2;
+            int drawX = Rect.X;
+
+            // 4. Apply horizontal alignment
+            switch (Alignment)
+            {
+                case Alignment.Start:
+                    drawX = Rect.X + (int)Padding;
+                    break;
+                case Alignment.End:
+                    drawX = Rect.Right - (int)Padding - drawW;
+                    break;
+                case Alignment.Center:
+                    drawX = Rect.X + (Rect.Width - drawW) / 2;
+                    break;
+            }
+
+            // 5. Draw the icon
+            Color iconTint = _isHovered ? HoverIconColor : IconColor;
+            Rectangle destRect = new Rectangle(drawX, drawY, drawW, drawH);
+
+            // Note: Make sure ArtGame's SpriteBatch property is accessible (public or internal) 
+            // to draw the raw Texture2D directly like this.
+            engine.SpriteBatch.Draw(IconTexture, destRect, iconTint);
+        }
+    }
+
+    public class SearchBar : IDrawable
+    {
+        // The core physical bounds
+        private Rectangle _baseRect;
+        public Rectangle Rect { get; set; }
+
+        public string TextValue { get; set; } = "";
+        public string Placeholder { get; set; }
+        public string FontName { get; set; }
+
+        public bool IsFocused { get; private set; }
+
+        // Animation Variables
+        private float _focusScale = 0f;  // Animates from 0.0 to 1.0
+        private float _cursorTimer = 0f;
+
+        private MouseState _prevMouseState;
+        private KeyboardState _prevKeyState;
+
+        public SearchBar(Rectangle rect, string fontName, string placeholder = "Search...")
+        {
+            _baseRect = rect;
+            Rect = rect;
+            FontName = fontName;
+            Placeholder = placeholder;
+
+            _prevMouseState = Mouse.GetState();
+            _prevKeyState = Keyboard.GetState();
+        }
+
+        // Call this from your Game's Window.TextInput event!
+        public void ReceiveTextInput(char character)
+        {
+            if (!IsFocused) return;
+
+            // Reset cursor blink so it stays solid while actively typing
+            _cursorTimer = 0f;
+
+            // If it's a standard printable character, add it!
+            if (char.IsLetterOrDigit(character) || char.IsPunctuation(character) || char.IsSymbol(character) || character == ' ')
+            {
+                TextValue += character;
+                Console.WriteLine(TextValue);
+            }
+        }
+
+        public void Update(ArtGame engine, float dt)
+        {
+            var mouseState = Mouse.GetState();
+            var keyState = Keyboard.GetState();
+            Point mousePos = new Point(mouseState.X, mouseState.Y);
+
+            // 1. Handle Click to Focus
+            if (mouseState.LeftButton == ButtonState.Pressed && _prevMouseState.LeftButton == ButtonState.Released)
+            {
+                IsFocused = Rect.Contains(mousePos);
+                if (IsFocused)
+                {
+                    TextInputEXT.StartTextInput();
+                    TextInputEXT.TextInput += ReceiveTextInput; // Subscribe to text input events
+                } else
+                {
+                    TextInputEXT.StopTextInput();
+                    TextInputEXT.TextInput -= ReceiveTextInput;
+                }
+            }
+
+            // 2. Animate the Focus State (Smoothly lerp between 0 and 1)
+            float targetScale = IsFocused ? 1f : 0f;
+
+            // 15f is the animation speed. Higher = faster snapping.
+            _focusScale = MathHelper.Lerp(_focusScale, targetScale, 15f * dt);
+
+            // Expand the rectangle's width slightly when focused
+            int expandAmount = (int)(20 * _focusScale);
+            Rect = new Rectangle(
+                _baseRect.X - (expandAmount / 2),
+                _baseRect.Y,
+                _baseRect.Width + expandAmount,
+                _baseRect.Height
+            );
+
+            // 3. Handle Backspace (We handle this manually since TextInput sometimes misses control keys)
+            if (IsFocused)
+            {
+                _cursorTimer += dt;
+
+                // Simple backspace logic. (For holding down backspace, you'd need a repeat timer, but this works for taps)
+                if (engine.IsKeyPressed(Keys.Back) && TextValue.Length > 0)
+                {
+                    TextValue = TextValue.Substring(0, TextValue.Length - 1);
+                    _cursorTimer = 0f;
+                }
+            }
+
+            _prevMouseState = mouseState;
+            _prevKeyState = keyState;
+        }
+
+        public void Draw(ArtGame engine)
+        {
+            // 1. Draw Background
+            // Darkens slightly when clicked
+            Color bgColor = Color.Lerp(new Color(25, 25, 25), new Color(40, 40, 40), _focusScale);
+            engine.DrawRectangle(Rect.X, Rect.Y, Rect.Width, Rect.Height, bgColor);
+
+            // 2. Draw Animated Underline
+            // Slides out from the center based on the focus animation
+            float currentLineWidth = Rect.Width * _focusScale;
+            float lineX = Rect.X + (Rect.Width / 2f) - (currentLineWidth / 2f);
+            engine.DrawRectangle(lineX, Rect.Bottom - 2, currentLineWidth, 2, Color.CornflowerBlue);
+
+            // 3. Setup Text Alignment
+            string textToDraw = string.IsNullOrEmpty(TextValue) ? Placeholder : TextValue;
+            Vector2 textSize = engine.MeasureText(FontName, textToDraw, 18f);
+
+            // Vertically center the text
+            float textY = Rect.Y + (Rect.Height - textSize.Y) / 2f;
+            Vector2 textPos = new Vector2(Rect.X + 10, textY);
+
+            // 4. Draw the Text
+            if (string.IsNullOrEmpty(TextValue))
+            {
+                engine.DrawText(FontName, Placeholder, textPos, Color.Gray * 0.5f, 18f);
+            }
+            else
+            {
+                engine.DrawText(FontName, TextValue, textPos, Color.White, 18f);
+                Console.WriteLine(TextValue);
+            }
+
+            // 5. Draw Blinking Cursor
+            if (IsFocused)
+            {
+                // Modulo math to make it visible for 0.5s, invisible for 0.5s
+                if (_cursorTimer % 1.0f < 0.5f)
+                {
+                    // Measure JUST the real typed text to put the cursor at the very end
+                    Vector2 actualTextSize = engine.MeasureText(FontName, TextValue, 1f);
+                    float cursorX = Rect.X + 10 + actualTextSize.X + 2; // +2 for a little padding
+
+                    engine.DrawRectangle(cursorX, textY + 2, 2, actualTextSize.Y - 4, Color.White);
+                }
+            }
         }
     }
 }

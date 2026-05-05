@@ -3,12 +3,33 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Graphics.PackedVector;
 using Microsoft.Xna.Framework.Input;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using SDL3;
 
 namespace ArtFramework;
 
 public abstract partial class ArtGame : Game
 {
+    // Constant
+    private const int TARGET_DISPLAY_INDEX = 0;
+
+    // Read Only
+    private static readonly (float Rating, Color Color)[] OsuDifficultySpectrum = new[]
+    {
+        (0.10f, new Color(66, 144, 251)),   // #4290FB (Gray-Blue)
+        (1.25f, new Color(79, 192, 255)),   // #4FC0FF (Blue)
+        (2.00f, new Color(79, 255, 213)),   // #4FFFD5 (Cyan)
+        (2.50f, new Color(124, 255, 79)),   // #7CFF4F (Green)
+        (3.30f, new Color(246, 240, 92)),   // #F6F05C (Yellow)
+        (4.20f, new Color(255, 128, 104)),  // #FF8068 (Orange/Salmon)
+        (4.90f, new Color(255, 78, 111)),   // #FF4E6F (Red)
+        (5.80f, new Color(198, 69, 184)),   // #C645B8 (Magenta)
+        (6.70f, new Color(101, 99, 222)),   // #6563DE (Purple)
+        (7.70f, new Color(24, 21, 142)),    // #18158E (Dark Blue)
+        (9.00f, new Color(0, 0, 0))         // #000000 (Black)
+    };
+
     // Internal state
     private Texture2D _pixel = null!;
     private BasicEffect _basicEffect = null!;
@@ -59,6 +80,22 @@ public abstract partial class ArtGame : Game
         IsFixedTimeStep = true;
         Graphics.SynchronizeWithVerticalRetrace = false;
         Graphics.ApplyChanges();
+    }
+
+    private void MoveToDisplay(int displayIndex)
+    {
+        IntPtr displayIdsPtr = SDL.SDL_GetDisplays(out int displayCount);
+        if (displayIdsPtr == IntPtr.Zero || displayIndex >= displayCount) return;
+
+        uint displayId = (uint)Marshal.ReadInt32(displayIdsPtr, displayIndex * sizeof(int));
+        SDL.SDL_free(displayIdsPtr);
+
+        SDL.SDL_GetDisplayBounds(displayId, out SDL.SDL_Rect bounds);
+        SDL.SDL_SetWindowPosition(
+            Window.Handle,
+            bounds.x + (bounds.w - GraphicsDevice.Viewport.Width) / 2,
+            bounds.y + (bounds.h - GraphicsDevice.Viewport.Height) / 2
+        );
     }
 
     public void HideCursor() => IsMouseVisible = false;
@@ -309,6 +346,7 @@ public abstract partial class ArtGame : Game
         Color? strokeColor = null)
     {
         if (!_fonts.TryGetValue(fontName, out var font)) return;
+
 
         CloseSpriteBatch();
         SetEffectParameters(fontName);
@@ -589,28 +627,38 @@ public abstract partial class ArtGame : Game
 
     public static Color GetDifficultyColor(float rating)
     {
-        // Easy (0.0 - 1.99) - Blue
-        if (rating < 2.0f)
-            return new Color(74, 166, 255);
+        // Clamp to minimum bounds
+        if (rating <= OsuDifficultySpectrum[0].Rating)
+            return OsuDifficultySpectrum[0].Color;
 
-        // Normal (2.0 - 2.69) - Green
-        if (rating < 2.7f)
-            return new Color(74, 255, 113);
+        // Clamp to maximum bounds
+        if (rating >= OsuDifficultySpectrum[^1].Rating)
+            return OsuDifficultySpectrum[^1].Color;
 
-        // Hard (2.7 - 3.99) - Yellow
-        if (rating < 4.0f)
-            return new Color(255, 204, 34);
+        // Find the correct bracket and interpolate between the two colors
+        for (int i = 0; i < OsuDifficultySpectrum.Length - 1; i++)
+        {
+            var start = OsuDifficultySpectrum[i];
+            var end = OsuDifficultySpectrum[i + 1];
 
-        // Insane (4.0 - 5.29) - Red
-        if (rating < 5.3f)
-            return new Color(255, 50, 50);
+            if (rating >= start.Rating && rating <= end.Rating)
+            {
+                // Calculate how far along we are between the two star ratings (0.0 to 1.0)
+                float t = (rating - start.Rating) / (end.Rating - start.Rating);
+                return LerpColor(start.Color, end.Color, t);
+            }
+        }
 
-        // Expert (5.3 - 6.49) - Pink/Magenta
-        if (rating < 6.5f)
-            return new Color(255, 62, 150);
+        return OsuDifficultySpectrum[0].Color; // Fallback
+    }
 
-        // Extra / Expert+ (6.5+) - Purple
-        return new Color(140, 60, 255);
+    private static Color LerpColor(Color a, Color b, float t)
+    {
+        return new Color(
+            (int)(a.R + (b.R - a.R) * t),
+            (int)(a.G + (b.G - a.G) * t),
+            (int)(a.B + (b.B - a.B) * t)
+        );
     }
 
     // ── Math Helpers ─────────────────────────────────────────────────────────
